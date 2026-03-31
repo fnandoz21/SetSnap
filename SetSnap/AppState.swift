@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
     private let exportService: ExportServiceProtocol
     private let monitor = NWPathMonitor()
     private var networkSatisfied = true
+    private var statusDismissTask: Task<Void, Never>?
 
     static func bootstrap() -> AppState {
         let photos = PhotosService()
@@ -68,9 +69,16 @@ final class AppState: ObservableObject {
     }
 
     func startScan() async {
-        guard hasReadAccess else { statusMessage = "Photos permission required."; return }
-        if settings.processOnlyOnWiFi && !networkSatisfied { statusMessage = "Waiting for Wi-Fi (or disable Wi-Fi-only)."; return }
+        guard hasReadAccess else {
+            scheduleTransientStatus("Photos permission required.", seconds: 4)
+            return
+        }
+        if settings.processOnlyOnWiFi && !networkSatisfied {
+            scheduleTransientStatus("Waiting for Wi-Fi (or disable Wi-Fi-only).", seconds: 4)
+            return
+        }
 
+        statusDismissTask?.cancel()
         isScanning = true
         statusMessage = "Scanning and analyzing videos..."
         await pipeline.runScan(settings: settings) { [weak self] stats in
@@ -80,13 +88,26 @@ final class AppState: ObservableObject {
         }
         await reloadFromStore()
         isScanning = false
-        statusMessage = "Scan complete."
+        scheduleTransientStatus("Scan complete.", seconds: 3)
     }
 
     func cancelScan() async {
         await pipeline.cancel()
         isScanning = false
-        statusMessage = "Scan cancelled."
+        scheduleTransientStatus("Scan cancelled.", seconds: 2)
+    }
+
+    /// Clears the bottom status banner after a delay (replaces prior scheduled clear).
+    private func scheduleTransientStatus(_ message: String, seconds: TimeInterval) {
+        statusDismissTask?.cancel()
+        statusMessage = message
+        statusDismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            if self.statusMessage == message {
+                self.statusMessage = ""
+            }
+        }
     }
 
     func allConcertClips(search: String = "") -> [ClipAsset] {
@@ -118,14 +139,19 @@ final class AppState: ObservableObject {
     }
 
     func export(snippet: ClipSnippet) async {
-        guard let phAsset = phAsset(for: snippet.assetID) else { statusMessage = "Could not locate original asset."; return }
+        guard let phAsset = phAsset(for: snippet.assetID) else {
+            scheduleTransientStatus("Could not locate original asset.", seconds: 4)
+            return
+        }
         do {
             let avAsset = try await photos.requestAVAsset(for: phAsset)
             let url = try await exportService.exportSnippet(asset: avAsset, snippet: snippet)
             try await exportService.saveToPhotos(url)
             await store.markSnippetExported(id: snippet.id, at: Date())
             await reloadFromStore()
-            statusMessage = "Snippet exported to Photos."
-        } catch { statusMessage = "Export failed: \(error.localizedDescription)" }
+            scheduleTransientStatus("Snippet exported to Photos.", seconds: 3)
+        } catch {
+            scheduleTransientStatus("Export failed: \(error.localizedDescription)", seconds: 5)
+        }
     }
 }

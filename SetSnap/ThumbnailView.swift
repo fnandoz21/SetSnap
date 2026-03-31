@@ -8,9 +8,19 @@ struct ThumbnailView: View {
 
     var body: some View {
         ZStack {
-            if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else { Rectangle().fill(Color.secondary.opacity(0.15)); ProgressView() }
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(AppTheme.surface)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ProgressView()
+                    .tint(AppTheme.secondaryAccent)
+            }
         }
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(AppTheme.divider, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .task(id: localIdentifier) { await loadThumbnail() }
     }
 
